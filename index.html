@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AES加密P2P聊天｜图片明文传输+消息回执</title>
+    <title>AES加密P2P聊天｜图片明文+消息回执（修复A发送bug）</title>
     <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -162,8 +162,8 @@
 </head>
 <body>
     <header>
-        <h1>AES加密P2P聊天｜图片明文+消息回执</h1>
-        <p class="description">文字AES加密；图片明文传输；每条消息右下角显示送达状态</p>
+        <h1>AES加密P2P聊天｜图片明文+消息回执【修复版】</h1>
+        <p class="description">修复A创建方无法发送消息，B发送消息无状态；增加8秒超时判定</p>
     </header>
 
     <div class="card">
@@ -267,6 +267,8 @@ const fileInput = document.getElementById('fileInput');
 
 // 保存消息DOM映射：msgId -> dom元素，用于回执更新状态
 const msgDomMap = {};
+const timeoutMap = {};
+const ACK_TIMEOUT = 8000; //8秒超时
 
 function genPeerId(roomName){
     const rand = Math.random().toString(36).slice(2,10);
@@ -274,6 +276,31 @@ function genPeerId(roomName){
 }
 function genMsgId(){
     return Math.random().toString(36).slice(2)+Date.now().toString(36);
+}
+
+// 更新消息状态（收到ack回执调用）
+function updateMsgStatus(msgId){
+    const dom = msgDomMap[msgId];
+    if(!dom) return;
+    //清除超时计时器
+    if(timeoutMap[msgId]) clearTimeout(timeoutMap[msgId]);
+    delete timeoutMap[msgId];
+
+    const statusSpan = dom.querySelector(".msg-status");
+    statusSpan.textContent = "✅已送达";
+    statusSpan.className = "msg-status status-delivered";
+    delete msgDomMap[msgId];
+}
+
+// 超时标记失败
+function markMsgFail(msgId){
+    const dom = msgDomMap[msgId];
+    if(!dom) return;
+    const statusSpan = dom.querySelector(".msg-status");
+    statusSpan.textContent = "❌发送失败(超时)";
+    statusSpan.className = "msg-status status-fail";
+    delete msgDomMap[msgId];
+    delete timeoutMap[msgId];
 }
 
 // 渲染单条消息：文字带解密按钮 / 图片 + 右下角状态标签
@@ -289,6 +316,10 @@ function renderMessage(msgObj, isSelf){
         if(msgObj.status === "sending"){
             statusSpan.textContent = "发送中";
             statusSpan.classList.add("status-sending");
+            //启动超时计时器
+            timeoutMap[msgObj.msgId] = setTimeout(()=>{
+                markMsgFail(msgObj.msgId);
+            }, ACK_TIMEOUT);
         }else if(msgObj.status === "delivered"){
             statusSpan.textContent = "✅已送达";
             statusSpan.classList.add("status-delivered");
@@ -336,25 +367,17 @@ function renderMessage(msgObj, isSelf){
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
 
-    // 保存dom引用，用于回执更新状态
+    // ✅修复：无论A/B，自己发送的消息都存入msgDomMap
     if(isSelf) msgDomMap[msgObj.msgId] = div;
-}
-
-// 更新消息状态（收到ack回执调用）
-function updateMsgStatus(msgId){
-    const dom = msgDomMap[msgId];
-    if(!dom) return;
-    const statusSpan = dom.querySelector(".msg-status");
-    statusSpan.textContent = "✅已送达";
-    statusSpan.className = "msg-status status-delivered";
-    delete msgDomMap[msgId];
 }
 
 document.getElementById('connectBtn').onclick = ()=>{
     const inputVal = roomIdInput.value.trim();
     if(!inputVal){rtcStatus.innerText="请输入房间名 或对方PeerID";return;}
     if(peer){peer.destroy();peer=null;}
+    dataConn = null;
     if(inputVal.includes("_")){
+        // B：主动连接方
         targetPeerId = inputVal;
         const myId = genPeerId("temp");
         peer = new Peer(myId,{
@@ -369,9 +392,10 @@ document.getElementById('connectBtn').onclick = ()=>{
         peer.on('open',()=>{
             const conn = peer.connect(targetPeerId);
             dataConn = conn;
-            setupDataChannel();
+            setupDataChannel(conn);
         })
     }else{
+        // A：创建房间，监听连接方
         targetPeerId = null;
         const myPeerId = genPeerId(inputVal);
         peer = new Peer(myPeerId,{
@@ -383,9 +407,10 @@ document.getElementById('connectBtn').onclick = ()=>{
             ]}
         });
         rtcStatus.innerText="等待对方连接，我的PeerID："+myPeerId;
+        // ✅核心修复：A收到连接，把conn传给setupDataChannel并且赋值全局dataConn
         peer.on('connection',(conn)=>{
             dataConn = conn;
-            setupDataChannel();
+            setupDataChannel(conn);
         });
     }
     peer.on('error',(err)=>{
@@ -393,11 +418,11 @@ document.getElementById('connectBtn').onclick = ()=>{
     });
 }
 
-function setupDataChannel(){
-    dataConn.on('open',()=>{
+function setupDataChannel(conn){
+    conn.on('open',()=>{
         rtcStatus.innerText="✅ P2P通道已建立";
     });
-    dataConn.on('data',(pkg)=>{
+    conn.on('data',(pkg)=>{
         // 收到回执ack
         if(pkg.ack === true){
             updateMsgStatus(pkg.msgId);
@@ -405,11 +430,11 @@ function setupDataChannel(){
         }
         // 收到普通消息，回发ack回执给发送方
         if(pkg.msgId){
-            dataConn.send({ack:true, msgId: pkg.msgId});
+            conn.send({ack:true, msgId: pkg.msgId});
         }
         renderMessage(pkg, false);
     });
-    dataConn.on('close',()=>{
+    conn.on('close',()=>{
         rtcStatus.innerText="🔴 P2P连接断开";
     });
 }
