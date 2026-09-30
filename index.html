@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AES加密P2P聊天（图片明文传输）</title>
+    <title>AES加密P2P聊天｜图片明文传输+消息回执</title>
     <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -110,9 +110,10 @@
             max-height:400px;
         }
         .msg-item{
-            margin:6px 0;
-            padding:6px;
+            margin:8px 0;
+            padding:8px;
             border-bottom:1px solid #eee;
+            position:relative;
         }
         .msg-cipher{
             color:#888;
@@ -137,6 +138,17 @@
             border-radius:4px;
             margin:4px 0;
         }
+        /* 消息右下角收发状态 */
+        .msg-status{
+            position:absolute;
+            right:8px;
+            bottom:4px;
+            font-size:0.7rem;
+            color:#777;
+        }
+        .status-sending{color:#f57c00;}
+        .status-delivered{color:#388e3c;}
+        .status-fail{color:#d32f2f;}
         footer {
             margin-top: 30px;
             text-align: center;
@@ -150,8 +162,8 @@
 </head>
 <body>
     <header>
-        <h1>AES加密P2P聊天｜图片明文传输</h1>
-        <p class="description">文字AES加密；图片不加密直接P2P传输；每条消息独立解密按钮</p>
+        <h1>AES加密P2P聊天｜图片明文+消息回执</h1>
+        <p class="description">文字AES加密；图片明文传输；每条消息右下角显示送达状态</p>
     </header>
 
     <div class="card">
@@ -253,15 +265,42 @@ const roomIdInput = document.getElementById('roomId');
 const keyInput = document.getElementById('keyInput');
 const fileInput = document.getElementById('fileInput');
 
+// 保存消息DOM映射：msgId -> dom元素，用于回执更新状态
+const msgDomMap = {};
+
 function genPeerId(roomName){
     const rand = Math.random().toString(36).slice(2,10);
     return roomName + "_" + rand;
 }
+function genMsgId(){
+    return Math.random().toString(36).slice(2)+Date.now().toString(36);
+}
 
-// 渲染单条消息：文字带解密按钮 / 图片
+// 渲染单条消息：文字带解密按钮 / 图片 + 右下角状态标签
 function renderMessage(msgObj, isSelf){
     const div = document.createElement("div");
     div.className = "msg-item";
+    div.dataset.msgid = msgObj.msgId;
+
+    // 状态标签
+    const statusSpan = document.createElement("span");
+    statusSpan.className = "msg-status";
+    if(isSelf){
+        if(msgObj.status === "sending"){
+            statusSpan.textContent = "发送中";
+            statusSpan.classList.add("status-sending");
+        }else if(msgObj.status === "delivered"){
+            statusSpan.textContent = "✅已送达";
+            statusSpan.classList.add("status-delivered");
+        }else{
+            statusSpan.textContent = "❌发送失败";
+            statusSpan.classList.add("status-fail");
+        }
+    }else{
+        statusSpan.textContent = "对方消息";
+    }
+    div.appendChild(statusSpan);
+
     if(msgObj.type === "text"){
         const cipherSpan = document.createElement("span");
         cipherSpan.className = "msg-cipher";
@@ -296,6 +335,19 @@ function renderMessage(msgObj, isSelf){
     }
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
+
+    // 保存dom引用，用于回执更新状态
+    if(isSelf) msgDomMap[msgObj.msgId] = div;
+}
+
+// 更新消息状态（收到ack回执调用）
+function updateMsgStatus(msgId){
+    const dom = msgDomMap[msgId];
+    if(!dom) return;
+    const statusSpan = dom.querySelector(".msg-status");
+    statusSpan.textContent = "✅已送达";
+    statusSpan.className = "msg-status status-delivered";
+    delete msgDomMap[msgId];
 }
 
 document.getElementById('connectBtn').onclick = ()=>{
@@ -345,8 +397,17 @@ function setupDataChannel(){
     dataConn.on('open',()=>{
         rtcStatus.innerText="✅ P2P通道已建立";
     });
-    dataConn.on('data',(msgObj)=>{
-        renderMessage(msgObj, false);
+    dataConn.on('data',(pkg)=>{
+        // 收到回执ack
+        if(pkg.ack === true){
+            updateMsgStatus(pkg.msgId);
+            return;
+        }
+        // 收到普通消息，回发ack回执给发送方
+        if(pkg.msgId){
+            dataConn.send({ack:true, msgId: pkg.msgId});
+        }
+        renderMessage(pkg, false);
     });
     dataConn.on('close',()=>{
         rtcStatus.innerText="🔴 P2P连接断开";
@@ -361,7 +422,8 @@ document.getElementById('sendChat').onclick = async ()=>{
     const key = keyInput.value.trim();
     if(!key){alert("请输入密钥");return;}
     const cipher = await aesEncrypt(txt, key);
-    const msg = {type:"text", cipher:cipher};
+    const msgId = genMsgId();
+    const msg = {type:"text", cipher:cipher, msgId, status:"sending"};
     dataConn.send(msg);
     renderMessage(msg, true);
     chatInput.value="";
@@ -377,7 +439,8 @@ fileInput.onchange = async (e)=>{
     const reader = new FileReader();
     reader.onload = (ev)=>{
         const base64 = ev.target.result;
-        const msg = {type:"image", base64:base64};
+        const msgId = genMsgId();
+        const msg = {type:"image", base64:base64, msgId, status:"sending"};
         dataConn.send(msg);
         renderMessage(msg, true);
     }
