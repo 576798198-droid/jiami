@@ -160,10 +160,10 @@
 
     <!-- P2P聊天模块 -->
     <div class="card">
-        <h2>💬 P2P房间聊天</h2>
-        <input id="roomId" type="text" placeholder="输入房间号，两个人输入同一个房间号，例如room123">
+        <h2>💬 P2P点对点聊天</h2>
+        <input id="roomId" type="text" placeholder="A：填房间名；B：粘贴A的PeerID">
         <div class="button-group" style="margin-top:8px;">
-            <button id="connectBtn">加入房间</button>
+            <button id="connectBtn">加入 / 发起连接</button>
             <button id="closeConn">断开连接</button>
         </div>
         <div class="status" id="rtcStatus">等待连接</div>
@@ -197,7 +197,7 @@
     </div>
 
     <script>
-        // ========== AES-GCM 加密函数（原代码复用） ==========
+        // ========== AES-GCM 加密函数 ==========
         async function getAesKey(passphrase) {
             const enc = new TextEncoder();
             const passKey = await crypto.subtle.importKey(
@@ -252,10 +252,10 @@
             return dec.decode(decrypted);
         }
 
-        // ========== P2P PeerJS 修复后的房间逻辑 ==========
+        // ========== P2P PeerJS 修复版本 ==========
         let peer = null;
         let dataConn = null;
-        let room = "";
+        let targetPeerId = null;
         const rtcStatus = document.getElementById('rtcStatus');
         const chatBox = document.getElementById('chatBox');
         const chatInput = document.getElementById('chatInput');
@@ -267,50 +267,70 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        // 生成随机唯一PeerID，避免ID冲突
+        // 生成随机唯一PeerID
         function genPeerId(roomName){
             const rand = Math.random().toString(36).slice(2,10);
             return roomName + "_" + rand;
         }
 
         document.getElementById('connectBtn').onclick = ()=>{
-            room = roomIdInput.value.trim();
-            if(!room){
-                rtcStatus.innerText="请输入房间号";
+            const inputVal = roomIdInput.value.trim();
+            if(!inputVal){
+                rtcStatus.innerText="请输入房间名 或对方PeerID";
                 return;
             }
             if(peer){
                 peer.destroy();
                 peer=null;
             }
-            const myPeerId = genPeerId(room);
-            peer = new Peer(myPeerId,{
-                host:'0.peerjs.com',
-                port:443,
-                secure:true,
-                config:{
-                    iceServers:[
-                        {urls:'stun:stun.l.google.com:19302'}
-                    ]
-                }
-            });
-            rtcStatus.innerText="正在加入房间："+room;
-            appendChat("👉 正在加入房间 "+room+"，我的PeerID："+myPeerId);
 
-            // 有人主动连我
-            peer.on('connection',(conn)=>{
-                dataConn = conn;
-                setupDataChannel();
-            });
+            // 判断：输入框里面如果包含下划线，说明是PeerID，B用来连接A
+            if(inputVal.includes("_")){
+                targetPeerId = inputVal;
+                // B自己生成一个随机PeerID
+                const myId = genPeerId("temp");
+                peer = new Peer(myId,{
+                    host:'0.peerjs.com',
+                    port:443,
+                    secure:true,
+                    config:{
+                        iceServers:[
+                            {urls:'stun:stun.l.google.com:19302'}
+                        ]
+                    }
+                });
+                rtcStatus.innerText="正在尝试连接对方："+targetPeerId;
+                appendChat("👉 正在主动发起连接到 "+targetPeerId);
 
-            peer.on('open',(id)=>{
-                rtcStatus.innerText="✅ 我的ID:"+id+"。等待对方加入";
-                appendChat("✅ 本地Peer就绪，等待同房间好友连接");
-                // 尝试连接房间里的另一个人（简易：尝试房间_开头的peer，这里简化：让一方复制对方ID，自动匹配）
-                // 简易方案：A先开房间，A把A的PeerID发给B，B填入，然后连接
-                // 改进：简易自动配对：A先上线，B上线后，B尝试去连接A的ID
-                appendChat("💡 操作：A加入房间后，复制A的PeerID发给B，B粘贴到房间输入框，点击加入即可建立P2P");
-            });
+                peer.on('open',()=>{
+                    // 打开成功，主动连接目标Peer
+                    const conn = peer.connect(targetPeerId);
+                    dataConn = conn;
+                    setupDataChannel();
+                })
+            }else{
+                // A：输入房间名，创建自己的Peer，等待别人来连
+                targetPeerId = null;
+                const myPeerId = genPeerId(inputVal);
+                peer = new Peer(myPeerId,{
+                    host:'0.peerjs.com',
+                    port:443,
+                    secure:true,
+                    config:{
+                        iceServers:[
+                            {urls:'stun:stun.l.google.com:19302'}
+                        ]
+                    }
+                });
+                rtcStatus.innerText="等待对方连接，我的PeerID："+myPeerId;
+                appendChat("✅ 你的PeerID："+myPeerId+"，复制发给好友");
+                // 收到别人连接
+                peer.on('connection',(conn)=>{
+                    dataConn = conn;
+                    setupDataChannel();
+                });
+            }
+
             peer.on('error',(err)=>{
                 rtcStatus.innerText="连接错误："+err.type;
                 appendChat("❌ 错误："+err.message);
@@ -337,7 +357,7 @@
             });
         }
 
-        // 发送聊天消息，自动AES加密再发送
+        // 发送聊天消息
         document.getElementById('sendChat').onclick = async ()=>{
             const msg = chatInput.value.trim();
             const key = keyInput.value.trim();
@@ -359,7 +379,6 @@
                 appendChat("❌ 加密失败："+e.message);
             }
         }
-        // 回车发送
         chatInput.addEventListener('keydown',e=>{
             if(e.key==='Enter') document.getElementById('sendChat').click();
         })
@@ -372,7 +391,7 @@
             appendChat("🔌 手动断开P2P连接");
         }
 
-        // ========== 原有AES独立加密解密UI逻辑 ==========
+        // ========== AES独立模块UI ==========
         const inputText = document.getElementById('input');
         const outputText = document.getElementById('output');
         const encryptBtn = document.getElementById('encrypt');
@@ -421,7 +440,6 @@
             }
         });
         
-        // iOS Safari 修复版复制
         copyBtn.addEventListener('click', () => {
             const text = outputText.value.trim();
             if (!text) {
@@ -465,7 +483,7 @@
         
         inputText.focus();
 
-        // ========== PWA Service Worker 注册 ==========
+        // ========== PWA Service Worker注册 ==========
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js')
