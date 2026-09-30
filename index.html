@@ -3,12 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>离线对话加密工具</title>
+    <title>离线AES加密+P2P聊天</title>
     <!-- PWA manifest -->
     <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="离线加密">
+    <meta name="apple-mobile-web-app-title" content="AES-P2P聊天">
+    <!-- PeerJS CDN -->
+    <script src="https://unpkg.com/peerjs@1/dist/peerjs.min.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -28,19 +30,35 @@
         
         header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             padding-bottom: 15px;
             border-bottom: 1px solid #ddd;
         }
         
         h1 {
-            font-size: 1.8rem;
-            margin-bottom: 10px;
+            font-size: 1.6rem;
+            margin-bottom: 8px;
         }
         
         .description {
             color: #666;
             font-size: 0.9rem;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom:20px;
+        }
+        input, textarea{
+            width:100%;
+            padding:12px;
+            border:1px solid #ddd;
+            border-radius:4px;
+            font-size:1rem;
+            margin-top:8px;
         }
         
         .container {
@@ -49,31 +67,19 @@
             gap: 20px;
         }
         
-        .input-group, .output-group {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
         h2 {
             font-size: 1.2rem;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             color: #444;
         }
         
         textarea {
-            width: 100%;
             min-height: 150px;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
             resize: vertical;
-            font-size: 1rem;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
         }
         
-        textarea:focus {
+        input:focus, textarea:focus {
             outline: none;
             border-color: #666;
         }
@@ -98,74 +104,92 @@
             background-color: #4CAF50;
             color: white;
         }
-        
-        #encrypt:hover {
-            background-color: #45a049;
-        }
-        
+        #encrypt:hover {background-color:#45a049}
         #decrypt {
             background-color: #2196F3;
             color: white;
         }
-        
-        #decrypt:hover {
-            background-color: #0b7dda;
-        }
-        
-        #copy {
+        #decrypt:hover {background-color:#0b7dda}
+        #copy, #clear {
             background-color: #f5f5f5;
             color: #333;
         }
-        
-        #copy:hover {
-            background-color: #e0e0e0;
+        #copy:hover,#clear:hover {background-color:#e0e0e0}
+        #connectBtn{
+            background-color:#9c27b0;
+            color:#fff;
         }
-        
-        #clear {
-            background-color: #f5f5f5;
-            color: #333;
-        }
-        
-        #clear:hover {
-            background-color: #e0e0e0;
+        #sendChat{
+            background-color:#ff9800;
+            color:#fff;
         }
         
         .status {
             margin-top: 10px;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             color: #666;
             text-align: center;
         }
-        
+        .chatBox{
+            border:1px solid #ddd;
+            min-height:220px;
+            padding:10px;
+            white-space:pre-wrap;
+            overflow-y:auto;
+            max-height:300px;
+        }
         footer {
             margin-top: 30px;
             text-align: center;
             font-size: 0.8rem;
             color: #666;
-            padding-top: 15px;
-            border-top: 1px solid #ddd;
+            padding-top:15px;
+            border-top:1px solid #ddd;
         }
     </style>
 </head>
 <body>
     <header>
-        <h1>离线加密工具</h1>
-        <p class="description">无需网络连接，本地完成加密解密操作</p>
+        <h1>AES离线加密 + P2P点对点聊天</h1>
+        <p class="description">WebRTC P2P，消息AES加密；仅握手依赖公共信令，聊天数据点对点直传</p>
     </header>
-    
+
+    <!-- AES密钥区域 -->
+    <div class="card">
+        <h2>🔐 加密密钥（聊天+加密解密共用同一个密钥）</h2>
+        <input id="keyInput" type="text" placeholder="输入密钥短语，双方必须完全一致，区分大小写">
+    </div>
+
+    <!-- P2P聊天模块 -->
+    <div class="card">
+        <h2>💬 P2P房间聊天</h2>
+        <input id="roomId" type="text" placeholder="输入房间号，两个人输入同一个房间号">
+        <div class="button-group" style="margin-top:8px;">
+            <button id="connectBtn">加入/创建房间</button>
+            <button id="closeConn">断开连接</button>
+        </div>
+        <div class="status" id="rtcStatus">等待连接</div>
+        <div class="chatBox" id="chatBox"></div>
+        <div class="button-group" style="margin-top:8px;">
+            <input id="chatInput" placeholder="输入消息，发送前自动AES加密">
+            <button id="sendChat">发送</button>
+        </div>
+    </div>
+
+    <!-- 独立AES加密解密模块 -->
     <div class="container">
-        <div class="input-group">
-            <h2>输入内容</h2>
-            <textarea id="input" placeholder="请输入要加密或解密的内容..."></textarea>
+        <div class="card">
+            <h2>📝 独立加密解密</h2>
+            <textarea id="input" placeholder="输入明文 / 粘贴密文"></textarea>
             <div class="button-group">
                 <button id="encrypt">加密</button>
                 <button id="decrypt">解密</button>
-                <button id="clear">清空</button>
+                <button id="clear">清空全部</button>
             </div>
         </div>
         
-        <div class="output-group">
-            <h2>处理结果</h2>
+        <div class="card">
+            <h2>📄 处理结果</h2>
             <textarea id="output" readonly placeholder="结果将显示在这里..."></textarea>
             <div class="button-group">
                 <button id="copy">复制结果</button>
@@ -175,98 +199,177 @@
     </div>
 
     <script>
-        // 自定义加密算法（保留你原有逻辑）
-        function customEncrypt(text, key = 13) {
-            if (!text) return '';
-            
-            let result = '';
-            const keyOffset = key % 26;
-            
-            for (let i = 0; i < text.length; i++) {
-                const charCode = text.charCodeAt(i);
-                
-                if (charCode >= 65 && charCode <= 90) {
-                    let shifted = charCode + keyOffset;
-                    if (shifted > 90) shifted -= 26;
-                    result += String.fromCharCode(shifted);
-                } else if (charCode >= 97 && charCode <= 122) {
-                    let shifted = charCode + keyOffset;
-                    if (shifted > 122) shifted -= 26;
-                    result += String.fromCharCode(shifted);
-                } else if (charCode >= 48 && charCode <= 57) {
-                    const digit = parseInt(text[i]);
-                    result += (digit + 5) % 10;
-                } else {
-                    result += '~' + charCode + '~';
-                }
-            }
-            
-            let checksum = 0;
-            for (let i = 0; i < text.length; i++) {
-                checksum += text.charCodeAt(i);
-            }
-            result += '|' + (checksum % 1000);
-            
-            return result;
+        // ========== AES-GCM 加密函数（原代码复用） ==========
+        async function getAesKey(passphrase) {
+            const enc = new TextEncoder();
+            const passKey = await crypto.subtle.importKey(
+                'raw',
+                enc.encode(passphrase),
+                { name: 'PBKDF2' },
+                false,
+                ['deriveKey']
+            );
+            return crypto.subtle.deriveKey(
+                {
+                    name: "PBKDF2",
+                    salt: enc.encode("aes-encrypt-static-salt"),
+                    iterations: 100000,
+                    hash: "SHA-256"
+                },
+                passKey,
+                { name: "AES-GCM", length: 256 },
+                false,
+                ["encrypt", "decrypt"]
+            );
         }
-        
-        function customDecrypt(text, key = 13) {
-            if (!text) return '';
-            
-            const parts = text.split('|');
-            if (parts.length !== 2) {
-                return '解密失败：无效的加密格式';
-            }
-            
-            const encryptedText = parts[0];
-            const checksum = parseInt(parts[1]);
-            
-            let result = '';
-            const keyOffset = key % 26;
-            let i = 0;
-            
-            while (i < encryptedText.length) {
-                if (encryptedText[i] === '~') {
-                    i++;
-                    let codeStr = '';
-                    while (i < encryptedText.length && encryptedText[i] !== '~') {
-                        codeStr += encryptedText[i];
-                        i++;
-                    }
-                    i++;
-                    result += String.fromCharCode(parseInt(codeStr));
-                } else if (encryptedText.charCodeAt(i) >= 65 && encryptedText.charCodeAt(i) <= 90) {
-                    let shifted = encryptedText.charCodeAt(i) - keyOffset;
-                    if (shifted < 65) shifted += 26;
-                    result += String.fromCharCode(shifted);
-                    i++;
-                } else if (encryptedText.charCodeAt(i) >= 97 && encryptedText.charCodeAt(i) <= 122) {
-                    let shifted = encryptedText.charCodeAt(i) - keyOffset;
-                    if (shifted < 97) shifted += 26;
-                    result += String.fromCharCode(shifted);
-                    i++;
-                } else if (encryptedText.charCodeAt(i) >= 48 && encryptedText.charCodeAt(i) <= 57) {
-                    const digit = parseInt(encryptedText[i]);
-                    result += (digit + 5) % 10;
-                    i++;
-                } else {
-                    result += encryptedText[i];
-                    i++;
-                }
-            }
-            
-            let calculatedChecksum = 0;
-            for (let j = 0; j < result.length; j++) {
-                calculatedChecksum += result.charCodeAt(j);
-            }
-            
-            if (calculatedChecksum % 1000 !== checksum) {
-                return '解密失败：校验和不匹配，数据可能被篡改或不是有效加密内容';
-            }
-            
-            return result;
+
+        async function aesEncrypt(plainText, passphrase) {
+            const key = await getAesKey(passphrase);
+            const enc = new TextEncoder();
+            const plainData = enc.encode(plainText);
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const encrypted = await crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv },
+                key,
+                plainData
+            );
+            const combined = new Uint8Array(iv.length + encrypted.byteLength);
+            combined.set(iv, 0);
+            combined.set(new Uint8Array(encrypted), iv.length);
+            return btoa(String.fromCharCode(...combined));
         }
-        
+
+        async function aesDecrypt(base64Str, passphrase) {
+            const key = await getAesKey(passphrase);
+            const raw = atob(base64Str);
+            const arr = Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+            const iv = arr.slice(0,12);
+            const cipher = arr.slice(12);
+            const decrypted = await crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: iv },
+                key,
+                cipher
+            );
+            const dec = new TextDecoder();
+            return dec.decode(decrypted);
+        }
+
+        // ========== P2P PeerJS 聊天逻辑 ==========
+        let peer = null;
+        let dataConn = null;
+        const rtcStatus = document.getElementById('rtcStatus');
+        const chatBox = document.getElementById('chatBox');
+        const chatInput = document.getElementById('chatInput');
+        const roomIdInput = document.getElementById('roomId');
+        const keyInput = document.getElementById('keyInput');
+
+        function appendChat(text){
+            chatBox.innerText += text + "\n";
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        document.getElementById('connectBtn').onclick = ()=>{
+            const room = roomIdInput.value.trim();
+            if(!room){
+                rtcStatus.innerText="请输入房间号";
+                return;
+            }
+            if(peer){
+                peer.destroy();
+                peer=null;
+            }
+            // 初始化Peer，使用公共PeerJS信令服务器
+            peer = new Peer(room,{
+                host:'0.peerjs.com',
+                port:443,
+                secure:true,
+                config:{
+                    iceServers:[
+                        {urls:'stun:stun.l.google.com:19302'}
+                    ]
+                }
+            });
+            rtcStatus.innerText="正在连接房间："+room;
+            appendChat("👉 正在连接房间 "+room);
+
+            peer.on('open',(id)=>{
+                rtcStatus.innerText="房间ID已就绪，等待对方接入";
+                appendChat("✅ 房间创建成功，ID："+id+"，等待好友加入");
+            });
+            // 收到别人的连接请求
+            peer.on('connection',(conn)=>{
+                dataConn = conn;
+                setupDataChannel();
+            });
+            // 主动连接对方
+            peer.on('open',()=>{
+                const conn = peer.connect(room);
+                dataConn = conn;
+                setupDataChannel();
+            });
+            peer.on('error',(err)=>{
+                rtcStatus.innerText="连接错误："+err.type;
+                appendChat("❌ 错误："+err.message);
+            });
+        }
+
+        function setupDataChannel(){
+            dataConn.on('open',()=>{
+                rtcStatus.innerText="✅ P2P通道已建立！消息点对点传输";
+                appendChat("🟢 P2P连接成功！");
+            });
+            dataConn.on('data',async (encryptedBase64)=>{
+                // 收到密文，AES解密
+                const key = keyInput.value.trim();
+                try{
+                    const plain = await aesDecrypt(encryptedBase64, key);
+                    appendChat("对方："+plain);
+                }catch(e){
+                    appendChat("❌ 收到消息解密失败（密钥错误/消息损坏）");
+                }
+            });
+            dataConn.on('close',()=>{
+                rtcStatus.innerText="🔴 P2P连接断开";
+                appendChat("🔴 P2P连接已断开");
+            });
+        }
+
+        // 发送聊天消息，自动AES加密再发送
+        document.getElementById('sendChat').onclick = async ()=>{
+            const msg = chatInput.value.trim();
+            const key = keyInput.value.trim();
+            if(!msg) return;
+            if(!dataConn || !dataConn.open){
+                appendChat("⚠️ P2P通道未连接");
+                return;
+            }
+            if(!key){
+                appendChat("⚠️ 请填写AES密钥");
+                return;
+            }
+            try{
+                const cipher = await aesEncrypt(msg, key);
+                dataConn.send(cipher);
+                appendChat("我："+msg);
+                chatInput.value="";
+            }catch(e){
+                appendChat("❌ 加密失败："+e.message);
+            }
+        }
+        // 回车发送
+        chatInput.addEventListener('keydown',e=>{
+            if(e.key==='Enter') document.getElementById('sendChat').click();
+        })
+
+        document.getElementById('closeConn').onclick = ()=>{
+            if(dataConn) dataConn.close();
+            if(peer) peer.destroy();
+            peer=null;dataConn=null;
+            rtcStatus.innerText="连接已断开";
+            appendChat("🔌 手动断开P2P连接");
+        }
+
+        // ========== 原有AES独立加密解密UI逻辑 ==========
         const inputText = document.getElementById('input');
         const outputText = document.getElementById('output');
         const encryptBtn = document.getElementById('encrypt');
@@ -275,14 +378,19 @@
         const clearBtn = document.getElementById('clear');
         const statusElement = document.getElementById('status');
         
-        encryptBtn.addEventListener('click', () => {
+        encryptBtn.addEventListener('click', async () => {
             const text = inputText.value.trim();
+            const key = keyInput.value.trim();
+            if (!key) {
+                showStatus('请输入密钥短语', 'red');
+                return;
+            }
             if (!text) {
                 showStatus('请输入要加密的内容', 'red');
                 return;
             }
             try {
-                const encrypted = customEncrypt(text);
+                const encrypted = await aesEncrypt(text, key);
                 outputText.value = encrypted;
                 showStatus('加密完成', 'green');
             } catch (error) {
@@ -290,22 +398,27 @@
             }
         });
         
-        decryptBtn.addEventListener('click', () => {
+        decryptBtn.addEventListener('click', async () => {
             const text = inputText.value.trim();
+            const key = keyInput.value.trim();
+            if (!key) {
+                showStatus('请输入密钥短语', 'red');
+                return;
+            }
             if (!text) {
-                showStatus('请输入要解密的内容', 'red');
+                showStatus('请输入Base64密文', 'red');
                 return;
             }
             try {
-                const decrypted = customDecrypt(text);
+                const decrypted = await aesDecrypt(text, key);
                 outputText.value = decrypted;
                 showStatus('解密完成', 'green');
             } catch (error) {
-                showStatus('解密失败: ' + error.message, 'red');
+                showStatus('解密失败：密钥错误 / 密文损坏', 'red');
             }
         });
         
-        // ========== iOS Safari 修复版复制 ==========
+        // iOS Safari 修复版复制
         copyBtn.addEventListener('click', () => {
             const text = outputText.value.trim();
             if (!text) {
