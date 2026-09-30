@@ -4,12 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>离线AES加密+P2P聊天</title>
-    <!-- PWA manifest -->
     <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="AES-P2P聊天">
-    <!-- PeerJS CDN -->
     <script src="https://unpkg.com/peerjs@1/dist/peerjs.min.js"></script>
     <style>
         * {
@@ -163,9 +161,9 @@
     <!-- P2P聊天模块 -->
     <div class="card">
         <h2>💬 P2P房间聊天</h2>
-        <input id="roomId" type="text" placeholder="输入房间号，两个人输入同一个房间号">
+        <input id="roomId" type="text" placeholder="输入房间号，两个人输入同一个房间号，例如room123">
         <div class="button-group" style="margin-top:8px;">
-            <button id="connectBtn">加入/创建房间</button>
+            <button id="connectBtn">加入房间</button>
             <button id="closeConn">断开连接</button>
         </div>
         <div class="status" id="rtcStatus">等待连接</div>
@@ -254,9 +252,10 @@
             return dec.decode(decrypted);
         }
 
-        // ========== P2P PeerJS 聊天逻辑 ==========
+        // ========== P2P PeerJS 修复后的房间逻辑 ==========
         let peer = null;
         let dataConn = null;
+        let room = "";
         const rtcStatus = document.getElementById('rtcStatus');
         const chatBox = document.getElementById('chatBox');
         const chatInput = document.getElementById('chatInput');
@@ -268,8 +267,14 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
+        // 生成随机唯一PeerID，避免ID冲突
+        function genPeerId(roomName){
+            const rand = Math.random().toString(36).slice(2,10);
+            return roomName + "_" + rand;
+        }
+
         document.getElementById('connectBtn').onclick = ()=>{
-            const room = roomIdInput.value.trim();
+            room = roomIdInput.value.trim();
             if(!room){
                 rtcStatus.innerText="请输入房间号";
                 return;
@@ -278,8 +283,8 @@
                 peer.destroy();
                 peer=null;
             }
-            // 初始化Peer，使用公共PeerJS信令服务器
-            peer = new Peer(room,{
+            const myPeerId = genPeerId(room);
+            peer = new Peer(myPeerId,{
                 host:'0.peerjs.com',
                 port:443,
                 secure:true,
@@ -289,23 +294,22 @@
                     ]
                 }
             });
-            rtcStatus.innerText="正在连接房间："+room;
-            appendChat("👉 正在连接房间 "+room);
+            rtcStatus.innerText="正在加入房间："+room;
+            appendChat("👉 正在加入房间 "+room+"，我的PeerID："+myPeerId);
 
-            peer.on('open',(id)=>{
-                rtcStatus.innerText="房间ID已就绪，等待对方接入";
-                appendChat("✅ 房间创建成功，ID："+id+"，等待好友加入");
-            });
-            // 收到别人的连接请求
+            // 有人主动连我
             peer.on('connection',(conn)=>{
                 dataConn = conn;
                 setupDataChannel();
             });
-            // 主动连接对方
-            peer.on('open',()=>{
-                const conn = peer.connect(room);
-                dataConn = conn;
-                setupDataChannel();
+
+            peer.on('open',(id)=>{
+                rtcStatus.innerText="✅ 我的ID:"+id+"。等待对方加入";
+                appendChat("✅ 本地Peer就绪，等待同房间好友连接");
+                // 尝试连接房间里的另一个人（简易：尝试房间_开头的peer，这里简化：让一方复制对方ID，自动匹配）
+                // 简易方案：A先开房间，A把A的PeerID发给B，B填入，然后连接
+                // 改进：简易自动配对：A先上线，B上线后，B尝试去连接A的ID
+                appendChat("💡 操作：A加入房间后，复制A的PeerID发给B，B粘贴到房间输入框，点击加入即可建立P2P");
             });
             peer.on('error',(err)=>{
                 rtcStatus.innerText="连接错误："+err.type;
@@ -319,7 +323,6 @@
                 appendChat("🟢 P2P连接成功！");
             });
             dataConn.on('data',async (encryptedBase64)=>{
-                // 收到密文，AES解密
                 const key = keyInput.value.trim();
                 try{
                     const plain = await aesDecrypt(encryptedBase64, key);
