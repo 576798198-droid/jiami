@@ -1,0 +1,16 @@
+{
+  "name": "离线AES加密工具",
+  "short_name": "AES加密",
+  "description": "Web Crypto AES-GCM 本地离线加密解密工具",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f0f0f0",
+  "theme_color": "#4CAF50",
+  "icons": [
+    {
+      "src": "https://cdn.jsdelivr.net/npm/simple-icons@v11/icons/lock.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

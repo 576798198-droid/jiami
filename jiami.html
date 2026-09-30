@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>离线对话加密工具</title>
+    <!-- PWA manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="离线加密">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        
+        body {
+            background-color: #f0f0f0;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        h1 {
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }
+        
+        .description {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .input-group, .output-group {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h2 {
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            color: #444;
+        }
+        
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+            font-size: 1rem;
+            margin-bottom: 15px;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #666;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            flex: 1;
+            transition: background-color 0.2s;
+        }
+        
+        #encrypt {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        #encrypt:hover {
+            background-color: #45a049;
+        }
+        
+        #decrypt {
+            background-color: #2196F3;
+            color: white;
+        }
+        
+        #decrypt:hover {
+            background-color: #0b7dda;
+        }
+        
+        #copy {
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        
+        #copy:hover {
+            background-color: #e0e0e0;
+        }
+        
+        #clear {
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        
+        #clear:hover {
+            background-color: #e0e0e0;
+        }
+        
+        .status {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: #666;
+            text-align: center;
+        }
+        
+        footer {
+            margin-top: 30px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: #666;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>离线加密工具</h1>
+        <p class="description">无需网络连接，本地完成加密解密操作</p>
+    </header>
+    
+    <div class="container">
+        <div class="input-group">
+            <h2>输入内容</h2>
+            <textarea id="input" placeholder="请输入要加密或解密的内容..."></textarea>
+            <div class="button-group">
+                <button id="encrypt">加密</button>
+                <button id="decrypt">解密</button>
+                <button id="clear">清空</button>
+            </div>
+        </div>
+        
+        <div class="output-group">
+            <h2>处理结果</h2>
+            <textarea id="output" readonly placeholder="结果将显示在这里..."></textarea>
+            <div class="button-group">
+                <button id="copy">复制结果</button>
+            </div>
+            <div class="status" id="status"></div>
+        </div>
+    </div>
+
+    <script>
+        // 自定义加密算法（保留你原有逻辑）
+        function customEncrypt(text, key = 13) {
+            if (!text) return '';
+            
+            let result = '';
+            const keyOffset = key % 26;
+            
+            for (let i = 0; i < text.length; i++) {
+                const charCode = text.charCodeAt(i);
+                
+                if (charCode >= 65 && charCode <= 90) {
+                    let shifted = charCode + keyOffset;
+                    if (shifted > 90) shifted -= 26;
+                    result += String.fromCharCode(shifted);
+                } else if (charCode >= 97 && charCode <= 122) {
+                    let shifted = charCode + keyOffset;
+                    if (shifted > 122) shifted -= 26;
+                    result += String.fromCharCode(shifted);
+                } else if (charCode >= 48 && charCode <= 57) {
+                    const digit = parseInt(text[i]);
+                    result += (digit + 5) % 10;
+                } else {
+                    result += '~' + charCode + '~';
+                }
+            }
+            
+            let checksum = 0;
+            for (let i = 0; i < text.length; i++) {
+                checksum += text.charCodeAt(i);
+            }
+            result += '|' + (checksum % 1000);
+            
+            return result;
+        }
+        
+        function customDecrypt(text, key = 13) {
+            if (!text) return '';
+            
+            const parts = text.split('|');
+            if (parts.length !== 2) {
+                return '解密失败：无效的加密格式';
+            }
+            
+            const encryptedText = parts[0];
+            const checksum = parseInt(parts[1]);
+            
+            let result = '';
+            const keyOffset = key % 26;
+            let i = 0;
+            
+            while (i < encryptedText.length) {
+                if (encryptedText[i] === '~') {
+                    i++;
+                    let codeStr = '';
+                    while (i < encryptedText.length && encryptedText[i] !== '~') {
+                        codeStr += encryptedText[i];
+                        i++;
+                    }
+                    i++;
+                    result += String.fromCharCode(parseInt(codeStr));
+                } else if (encryptedText.charCodeAt(i) >= 65 && encryptedText.charCodeAt(i) <= 90) {
+                    let shifted = encryptedText.charCodeAt(i) - keyOffset;
+                    if (shifted < 65) shifted += 26;
+                    result += String.fromCharCode(shifted);
+                    i++;
+                } else if (encryptedText.charCodeAt(i) >= 97 && encryptedText.charCodeAt(i) <= 122) {
+                    let shifted = encryptedText.charCodeAt(i) - keyOffset;
+                    if (shifted < 97) shifted += 26;
+                    result += String.fromCharCode(shifted);
+                    i++;
+                } else if (encryptedText.charCodeAt(i) >= 48 && encryptedText.charCodeAt(i) <= 57) {
+                    const digit = parseInt(encryptedText[i]);
+                    result += (digit + 5) % 10;
+                    i++;
+                } else {
+                    result += encryptedText[i];
+                    i++;
+                }
+            }
+            
+            let calculatedChecksum = 0;
+            for (let j = 0; j < result.length; j++) {
+                calculatedChecksum += result.charCodeAt(j);
+            }
+            
+            if (calculatedChecksum % 1000 !== checksum) {
+                return '解密失败：校验和不匹配，数据可能被篡改或不是有效加密内容';
+            }
+            
+            return result;
+        }
+        
+        const inputText = document.getElementById('input');
+        const outputText = document.getElementById('output');
+        const encryptBtn = document.getElementById('encrypt');
+        const decryptBtn = document.getElementById('decrypt');
+        const copyBtn = document.getElementById('copy');
+        const clearBtn = document.getElementById('clear');
+        const statusElement = document.getElementById('status');
+        
+        encryptBtn.addEventListener('click', () => {
+            const text = inputText.value.trim();
+            if (!text) {
+                showStatus('请输入要加密的内容', 'red');
+                return;
+            }
+            try {
+                const encrypted = customEncrypt(text);
+                outputText.value = encrypted;
+                showStatus('加密完成', 'green');
+            } catch (error) {
+                showStatus('加密失败: ' + error.message, 'red');
+            }
+        });
+        
+        decryptBtn.addEventListener('click', () => {
+            const text = inputText.value.trim();
+            if (!text) {
+                showStatus('请输入要解密的内容', 'red');
+                return;
+            }
+            try {
+                const decrypted = customDecrypt(text);
+                outputText.value = decrypted;
+                showStatus('解密完成', 'green');
+            } catch (error) {
+                showStatus('解密失败: ' + error.message, 'red');
+            }
+        });
+        
+        // ========== iOS Safari 修复版复制 ==========
+        copyBtn.addEventListener('click', () => {
+            const text = outputText.value.trim();
+            if (!text) {
+                showStatus('没有可复制的内容', 'red');
+                return;
+            }
+            try {
+                const temp = document.createElement('textarea');
+                temp.value = text;
+                temp.style.position = 'absolute';
+                temp.style.left = '-9999px';
+                document.body.appendChild(temp);
+                temp.select();
+                temp.setSelectionRange(0, 99999);
+                document.execCommand('copy');
+                document.body.removeChild(temp);
+                showStatus('已复制到剪贴板', 'green');
+            } catch (err) {
+                showStatus('复制失败，请手动选中复制', 'red');
+            }
+        });
+        
+        clearBtn.addEventListener('click', () => {
+            inputText.value = '';
+            outputText.value = '';
+            inputText.focus();
+            showStatus('');
+        });
+        
+        function showStatus(message, color) {
+            statusElement.textContent = message;
+            statusElement.style.color = color;
+            if (message) {
+                setTimeout(() => {
+                    if (statusElement.textContent === message) {
+                        showStatus('', '');
+                    }
+                }, 3000);
+            }
+        }
+        
+        inputText.focus();
+
+        // ========== PWA Service Worker 注册 ==========
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('SW注册成功', reg))
+                    .catch(err => console.log('SW注册失败', err));
+            });
+        }
+    </script>
+</body>
+</html>
