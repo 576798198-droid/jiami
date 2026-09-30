@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AES加密P2P聊天｜图片明文+消息回执（修复A发送bug）</title>
+    <title>AES加密P2P聊天｜回执+解密按钮切换修复</title>
     <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -121,6 +121,7 @@
         .msg-plain{
             color:#222;
             margin-top:4px;
+            display:none;
         }
         .dec-btn{
             font-size:0.75rem;
@@ -162,8 +163,8 @@
 </head>
 <body>
     <header>
-        <h1>AES加密P2P聊天｜图片明文+消息回执【修复版】</h1>
-        <p class="description">修复A创建方无法发送消息，B发送消息无状态；增加8秒超时判定</p>
+        <h1>AES加密P2P聊天｜回执+解密切换修复</h1>
+        <p class="description">修复A发送消息、B状态超时竞态、解密按钮切换密文/明文</p>
     </header>
 
     <div class="card">
@@ -268,7 +269,8 @@ const fileInput = document.getElementById('fileInput');
 // 保存消息DOM映射：msgId -> dom元素，用于回执更新状态
 const msgDomMap = {};
 const timeoutMap = {};
-const ACK_TIMEOUT = 8000; //8秒超时
+const ackReceivedSet = new Set(); // 已收到ack集合，防止重复ack
+const ACK_TIMEOUT = 8000;
 
 function genPeerId(roomName){
     const rand = Math.random().toString(36).slice(2,10);
@@ -280,11 +282,16 @@ function genMsgId(){
 
 // 更新消息状态（收到ack回执调用）
 function updateMsgStatus(msgId){
+    if(ackReceivedSet.has(msgId)) return;
+    ackReceivedSet.add(msgId);
+
     const dom = msgDomMap[msgId];
     if(!dom) return;
     //清除超时计时器
-    if(timeoutMap[msgId]) clearTimeout(timeoutMap[msgId]);
-    delete timeoutMap[msgId];
+    if(timeoutMap[msgId]){
+        clearTimeout(timeoutMap[msgId]);
+        delete timeoutMap[msgId];
+    }
 
     const statusSpan = dom.querySelector(".msg-status");
     statusSpan.textContent = "✅已送达";
@@ -294,6 +301,7 @@ function updateMsgStatus(msgId){
 
 // 超时标记失败
 function markMsgFail(msgId){
+    if(ackReceivedSet.has(msgId)) return;
     const dom = msgDomMap[msgId];
     if(!dom) return;
     const statusSpan = dom.querySelector(".msg-status");
@@ -303,7 +311,7 @@ function markMsgFail(msgId){
     delete timeoutMap[msgId];
 }
 
-// 渲染单条消息：文字带解密按钮 / 图片 + 右下角状态标签
+// 渲染单条消息：文字带解密切换按钮 / 图片 + 右下角状态标签
 function renderMessage(msgObj, isSelf){
     const div = document.createElement("div");
     div.className = "msg-item";
@@ -336,24 +344,38 @@ function renderMessage(msgObj, isSelf){
         const cipherSpan = document.createElement("span");
         cipherSpan.className = "msg-cipher";
         cipherSpan.textContent = (isSelf ? "我(密文): " : "对方(密文): ") + msgObj.cipher;
+
+        const plainDiv = document.createElement("div");
+        plainDiv.className = "msg-plain";
+        plainDiv.textContent = "明文：";
+
         const decryptBtn = document.createElement("button");
         decryptBtn.className = "dec-btn";
         decryptBtn.textContent = "解密";
+        let showPlain = false;
+        let plainTextCache = "";
+
         decryptBtn.onclick = async ()=>{
-            try{
-                const plain = await aesDecrypt(msgObj.cipher, keyInput.value.trim());
-                const plainDiv = document.createElement("div");
-                plainDiv.className = "msg-plain";
-                plainDiv.textContent = "明文：" + plain;
-                div.appendChild(plainDiv);
-                decryptBtn.disabled = true;
-                decryptBtn.textContent = "已解密";
-            }catch(e){
-                alert("解密失败：密钥错误");
+            if(!showPlain){
+                try{
+                    plainTextCache = await aesDecrypt(msgObj.cipher, keyInput.value.trim());
+                    plainDiv.textContent = "明文：" + plainTextCache;
+                    plainDiv.style.display = "block";
+                    decryptBtn.textContent = "已解密";
+                    showPlain = true;
+                }catch(e){
+                    alert("解密失败：密钥错误");
+                }
+            }else{
+                //再次点击：隐藏明文，切回密文
+                plainDiv.style.display = "none";
+                decryptBtn.textContent = "解密";
+                showPlain = false;
             }
         }
         div.appendChild(cipherSpan);
         div.appendChild(decryptBtn);
+        div.appendChild(plainDiv);
     }else if(msgObj.type === "image"){
         const label = document.createElement("div");
         label.textContent = isSelf ? "我发送图片：" : "对方发送图片：";
@@ -367,7 +389,7 @@ function renderMessage(msgObj, isSelf){
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
 
-    // ✅修复：无论A/B，自己发送的消息都存入msgDomMap
+    // 自己发送的消息存入msgDomMap
     if(isSelf) msgDomMap[msgObj.msgId] = div;
 }
 
@@ -407,7 +429,7 @@ document.getElementById('connectBtn').onclick = ()=>{
             ]}
         });
         rtcStatus.innerText="等待对方连接，我的PeerID："+myPeerId;
-        // ✅核心修复：A收到连接，把conn传给setupDataChannel并且赋值全局dataConn
+        // A收到连接，绑定conn
         peer.on('connection',(conn)=>{
             dataConn = conn;
             setupDataChannel(conn);
@@ -421,6 +443,7 @@ document.getElementById('connectBtn').onclick = ()=>{
 function setupDataChannel(conn){
     conn.on('open',()=>{
         rtcStatus.innerText="✅ P2P通道已建立";
+        dataConn = conn; // 强制同步全局dataConn，修复A发送
     });
     conn.on('data',(pkg)=>{
         // 收到回执ack
@@ -436,6 +459,7 @@ function setupDataChannel(conn){
     });
     conn.on('close',()=>{
         rtcStatus.innerText="🔴 P2P连接断开";
+        dataConn = null;
     });
 }
 
@@ -443,7 +467,11 @@ function setupDataChannel(conn){
 document.getElementById('sendChat').onclick = async ()=>{
     const txt = chatInput.value.trim();
     if(!txt) return;
-    if(!dataConn || !dataConn.open){alert("P2P未连接");return;}
+    // 双重校验：全局dataConn + open状态
+    if(!dataConn || !dataConn.open){
+        alert("P2P通道未就绪，无法发送");
+        return;
+    }
     const key = keyInput.value.trim();
     if(!key){alert("请输入密钥");return;}
     const cipher = await aesEncrypt(txt, key);
